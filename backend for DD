@@ -1,0 +1,188 @@
+import os
+import cv2
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.svm import SVC
+import joblib
+import json
+from tqdm import tqdm  # ✅ Real-time progress bars
+import logging  # ✅ Better logging
+import time  # ✅ To measure training time
+
+# --- Configuration ---
+dataset_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\PlantVillage"   # ✅ Dataset path
+model_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\models\svm_crop_disease.pkl"  # ✅ Model path
+json_file = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\crop_diseases.json"  # ✅ JSON file path
+img_size = (150, 150)
+
+# ✅ Logging Configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+# --- 1. Load and Preprocess Dataset ---
+def load_dataset():
+    """Load images from folders and assign labels with progress bars."""
+    images, labels = [], []
+    label_map = {}
+
+    # Check if dataset path exists
+    if not os.path.exists(dataset_path):
+        logging.error(f"❌ Dataset path not found: {dataset_path}")
+        return np.array(images), np.array(labels), label_map
+
+    # ✅ Loop through each category
+    for idx, category in enumerate(os.listdir(dataset_path)):
+        category_path = os.path.join(dataset_path, category)
+
+        # Skip if not a directory
+        if not os.path.isdir(category_path):
+            continue  
+
+        label_map[idx] = category
+
+        # ✅ Load image files with a progress bar
+        img_files = [f for f in os.listdir(category_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
+        logging.info(f"📂 Loading category: {category} with {len(img_files)} images")
+
+        for img_name in tqdm(img_files, desc=f"📂 Loading {category}", unit="img"):
+            img_path = os.path.join(category_path, img_name)
+
+            img = cv2.imread(img_path)
+            
+            if img is not None:
+                img = cv2.resize(img, img_size)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                images.append(img.flatten())
+                labels.append(idx)
+            else:
+                logging.warning(f"⚠ Skipping invalid image: {img_name}")
+
+    return np.array(images), np.array(labels), label_map
+
+
+# --- 2. Train SVM Model with Real-Time Progress ---
+def train_model():
+    """Train the SVM classifier with real-time progress and save it."""
+    print("\n🛠 Training the model...")
+
+    # Load dataset
+    X, y, label_map = load_dataset()
+    
+    if len(X) == 0 or len(y) == 0:
+        print("❌ No data loaded. Check the dataset path.")
+        return
+
+    print("✅ Data loaded successfully! Splitting into training and testing sets...")
+
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    print("🚀 Training the SVM model with real-time progress...")
+
+    start_time = time.time()  # Track training start time
+
+    # Initialize the SVM classifier
+    svm_model = SVC(kernel='linear', probability=True)
+
+    # Batch training simulation with tqdm progress
+    batch_size = len(X_train) // 10  # Split into 10 batches for simulation
+    batches = range(0, len(X_train), batch_size)
+
+    for i in tqdm(batches, desc="🔧 Training Batches", unit="batch"):
+        batch_end = min(i + batch_size, len(X_train))
+        svm_model.fit(X_train[i:batch_end], y_train[i:batch_end])
+
+        # Calculate accuracy on test data for each batch
+        batch_accuracy = svm_model.score(X_test, y_test) * 100
+        logging.info(f"📊 Batch {i // batch_size + 1}: Accuracy: {batch_accuracy:.2f}%")
+
+    end_time = time.time()  # Track end time
+    elapsed_time = end_time - start_time
+
+    print("✅ Model training completed!")
+    print(f"⏱ Training time: {elapsed_time:.2f} seconds")
+
+    # Save the model
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    joblib.dump((svm_model, label_map), model_path)
+
+    # Final accuracy
+    accuracy = svm_model.score(X_test, y_test)
+    print(f"📊 Final Model Accuracy: {accuracy * 100:.2f}%")
+    print(f"✅ Model saved at: {model_path}")
+
+
+# --- 3. Load Disease Information ---
+def load_disease_info():
+    """Load disease information from JSON file."""
+    try:
+        with open(json_file, 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        logging.error(f"❌ JSON file not found: {json_file}")
+        return {}
+
+
+# --- 4. Predict Disease from Image ---
+def predict_disease(image_path):
+    """Predict disease from the given image."""
+    
+    # Check if model exists
+    if not os.path.exists(model_path):
+        logging.error(f"❌ Model not found at: {model_path}. Please train it first.")
+        return
+
+    # Load model
+    try:
+        model, label_map = joblib.load(model_path)
+    except Exception as e:
+        logging.error(f"❌ Error loading model: {str(e)}")
+        return
+
+    # Check if image exists
+    if not os.path.exists(image_path):
+        logging.error(f"❌ Image not found: {image_path}")
+        return
+
+    img = cv2.imread(image_path)
+
+    if img is None:
+        logging.error(f"❌ Unable to read image: {image_path}")
+        return
+
+    # Preprocess the image
+    img = cv2.resize(img, img_size)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_flatten = img.flatten().reshape(1, -1)
+
+    # Make prediction
+    prediction = model.predict(img_flatten)[0]
+    confidence = np.max(model.predict_proba(img_flatten)) * 100
+    disease_name = label_map[prediction]
+
+    # Load disease info
+    disease_info = load_disease_info().get(disease_name, {})
+
+    # Print the result
+    logging.info(f"\n🌿 Disease: {disease_name}")
+    logging.info(f"🔍 Confidence: {confidence:.2f}%")
+
+    if disease_info:
+        logging.info("\n⚠ Precautions:")
+        for step in disease_info.get("precautions", []):
+            logging.info(f"- {step}")
+    else:
+        logging.info("No information available.")
+
+
+# --- 5. Main Execution ---
+if __name__ == '__main__':
+    # ✅ Train the model if it doesn't exist
+    if not os.path.exists(model_path):
+        train_model()
+
+    # ✅ Use a sample image for testing
+    test_image = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\PlantVillage\Potato___Late_blight\00b1f292-23dd-44d4-aad3-c1ffb6a6ad5a___RS_LB 4479.JPG"  # ✅ Correct image path
+    logging.info("\n🔎 Predicting disease for: " + test_image)
+    predict_disease(test_image) #PLANT DATASET IS NOT THERE IN JSON .
