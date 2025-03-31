@@ -1,0 +1,107 @@
+{
+  "Pepper__bell___Bacterial_spot": {
+      "precautions": [
+          "Remove infected leaves immediately",
+          "Apply copper-based bactericides weekly",
+          "Avoid overhead watering to prevent spread"
+      ]
+  },
+  "Pepper__bell___healthy": {
+      "precautions": [
+          "Maintain proper plant spacing",
+          "Use balanced fertilizers",
+          "Monitor for early signs of disease"
+      ]
+  },
+  "Potato___Early_blight": {
+      "precautions": [
+          "Apply fungicides containing chlorothalonil",
+          "Remove lower leaves as plants grow",
+          "Practice crop rotation"
+      ]
+  },
+  "Potato___healthy": {
+      "precautions": [
+          "Use certified disease-free seed potatoes",
+          "Water plants at the base",
+          "Control Colorado potato beetles"
+      ]
+  },
+  "Potato___Late_blight": {
+      "precautions": [
+          "Destroy infected plants immediately",
+          "Apply fungicides preventatively",
+          "Avoid planting near tomatoes"
+      ]
+  },
+  "Tomato_Bacterial_spot": {
+      "precautions": [
+          "Use disease-free seeds",
+          "Apply copper sprays early in season",
+          "Avoid working with wet plants"
+      ]
+  },
+  "Tomato_Early_blight": {
+      "precautions": [
+          "Stake plants for better air circulation",
+          "Apply fungicides at first signs",
+          "Remove infected plant debris"
+      ]
+  },
+  "Tomato_healthy": {
+      "precautions": [
+          "Rotate crops annually",
+          "Water in the morning",
+          "Use resistant varieties when possible"
+      ]
+  },
+  "Tomato_Late_blight": {
+      "precautions": [
+          "Destroy all infected plants",
+          "Apply copper-based fungicides",
+          "Avoid overhead irrigation"
+      ]
+  },
+  "Tomato_Leaf_Mold": {
+      "precautions": [
+          "Reduce humidity in greenhouses",
+          "Improve air circulation",
+          "Apply fungicides containing chlorothalonil"
+      ]
+  },
+  "Tomato_Septoria_leaf_spot": {
+      "precautions": [
+          "Remove infected leaves promptly",
+          "Avoid overhead watering",
+          "Apply fungicides containing mancozeb"
+      ]
+  },
+  "Tomato_Spider_mites_Two_spotted_spider_mite": {
+      "precautions": [
+          "Spray plants with water to dislodge mites",
+          "Use insecticidal soaps",
+          "Introduce predatory mites"
+      ]
+  },
+  "Tomato__Target_Spot": {
+      "precautions": [
+          "Prune for better air flow",
+          "Apply fungicides early",
+          "Remove all plant debris after harvest"
+      ]
+  },
+  "Tomato__Tomato_mosaic_virus": {
+      "precautions": [
+          "Use virus-free seeds",
+          "Disinfect tools regularly",
+          "Control aphid populations"
+      ]
+  },
+  "Tomato__Tomato_YellowLeaf__Curl_Virus": {
+      "precautions": [
+          "Use resistant varieties",
+          "Control whitefly populations",
+          "Remove infected plants promptly"
+      ]
+  }
+}
