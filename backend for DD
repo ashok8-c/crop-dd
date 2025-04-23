@@ -1,133 +1,204 @@
 import os
 import cv2
-import numpy as np
-import joblib
-import json
-import logging
-import time
-from tqdm import tqdm
-from skimage.feature import hog
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torchvision import models, transforms
 from sklearn.model_selection import train_test_split
-from sklearn.svm import SVC
+from tqdm import tqdm
+import logging
+import json
 
 # --- Configuration ---
 dataset_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\PlantVillage"
-model_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\models\svm_crop_disease.pkl"
-json_file = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\crop_diseases.json"
-img_size = (150, 150)
+model_save_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\models\resnet_crop_disease.pth"
+json_file_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\crop_diseases.json"
+image_size = (224, 224)
 
 # ✅ Logging Configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def extract_features(img):
-    """Extracts HOG features from an image."""
-    img = cv2.resize(img, img_size)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img = img / 255.0  # Normalize pixel values
-    features = hog(img, pixels_per_cell=(16, 16), cells_per_block=(2, 2), feature_vector=True)
-    return features
+# ✅ Custom dataset class
+class CropDiseaseDataset(Dataset):
+    def __init__(self, dataset_path, label_map, transform=None):
+        self.dataset_path = dataset_path
+        self.label_map = label_map
+        self.transform = transform
+        self.image_paths = []
+        self.labels = []
 
-def load_dataset():
-    """Load images from folders, extract features, and assign labels."""
-    images, labels = [], []
+        for idx, category in enumerate(sorted(os.listdir(dataset_path))):
+            category_path = os.path.join(dataset_path, category)
+            if not os.path.isdir(category_path):
+                continue
+            label_map[idx] = category
+            for img_name in os.listdir(category_path):
+                if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    self.image_paths.append(os.path.join(category_path, img_name))
+                    self.labels.append(idx)
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        label = self.labels[idx]
+        if self.transform:
+            img = self.transform(img)
+        return img, label
+
+# ✅ Data augmentation and normalization
+train_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomResizedCrop(image_size[0]),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+val_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize(image_size),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# ✅ Load and split the dataset
+def load_data():
     label_map = {}
-    if not os.path.exists(dataset_path):
-        logging.error(f"❌ Dataset path not found: {dataset_path}")
-        return np.array(images), np.array(labels), label_map
+    full_dataset = CropDiseaseDataset(dataset_path, label_map, transform=None)
+    indices = list(range(len(full_dataset)))
+    train_idx, val_idx = train_test_split(indices, test_size=0.2, stratify=full_dataset.labels, random_state=42)
 
-    for idx, category in enumerate(os.listdir(dataset_path)):
-        category_path = os.path.join(dataset_path, category)
-        if not os.path.isdir(category_path):
-            continue  
-        label_map[idx] = category
-        img_files = [f for f in os.listdir(category_path) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        logging.info(f"📂 Loading category: {category} ({len(img_files)} images)")
+    train_data = CropDiseaseDataset(dataset_path, label_map, transform=train_transforms)
+    val_data = CropDiseaseDataset(dataset_path, label_map, transform=val_transforms)
 
-        for img_name in tqdm(img_files, desc=f"📂 Loading {category}", unit="img"):
-            img_path = os.path.join(category_path, img_name)
-            img = cv2.imread(img_path)
-            if img is not None:
-                images.append(extract_features(img))
-                labels.append(idx)
-            else:
-                logging.warning(f"⚠ Skipping invalid image: {img_name}")
-    
-    return np.array(images), np.array(labels), label_map
+    train_dataset = torch.utils.data.Subset(train_data, train_idx)
+    val_dataset = torch.utils.data.Subset(val_data, val_idx)
 
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+
+    return train_loader, val_loader, label_map
+
+# ✅ Build the model
+def build_model(num_classes):
+    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    for param in model.parameters():
+        param.requires_grad = True  # Fine-tune entire model
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, num_classes)
+    return model
+
+# ✅ Evaluate model
+def evaluate_model(model, val_loader, device):
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    return 100 * correct / total
+
+# ✅ Train the model with fine-tuning and scheduler
 def train_model():
-    """Train the SVM classifier and save it."""
-    print("\n🛠 Training the model...")
-    X, y, label_map = load_dataset()
-    if len(X) == 0 or len(y) == 0:
-        print("❌ No data loaded. Check the dataset path.")
-        return
-    
-    print("✅ Data loaded successfully! Splitting into training and testing sets...")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    train_loader, val_loader, label_map = load_data()
+    model = build_model(len(label_map))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
 
-    print("🚀 Training the SVM model...")
-    start_time = time.time()
-    svm_model = SVC(kernel='linear', probability=True)
-    svm_model.fit(X_train, y_train)
-    end_time = time.time()
-    
-    print(f"⏱ Training time: {end_time - start_time:.2f} seconds")
-    accuracy = svm_model.score(X_test, y_test) * 100
-    print(f"📊 Final Model Accuracy: {accuracy:.2f}%")
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    joblib.dump((svm_model, label_map), model_path)
-    print(f"✅ Model saved at: {model_path}")
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
-def load_disease_info():
-    """Load disease information from JSON file."""
-    try:
-        with open(json_file, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        logging.error(f"❌ JSON file not found: {json_file}")
-        return {}
+    best_acc = 0.0
+    for epoch in range(15):
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
 
+        for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/15"):
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+        train_acc = 100 * correct / total
+        val_acc = evaluate_model(model, val_loader, device)
+        scheduler.step()
+
+        print(f"Epoch [{epoch+1}/15], Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%")
+
+        if val_acc > best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict(), model_save_path)
+            print(f"✅ Best model saved with val acc: {val_acc:.2f}%")
+
+# ✅ Predict disease with confidence score
 def predict_disease(image_path):
-    """Predict disease from an image using trained SVM model."""
-    if not os.path.exists(model_path):
-        logging.error(f"❌ Model not found: {model_path}")
-        return
-    
-    try:
-        model, label_map = joblib.load(model_path)
-    except Exception as e:
-        logging.error(f"❌ Error loading model: {str(e)}")
-        return
-    
-    if not os.path.exists(image_path):
-        logging.error(f"❌ Image not found: {image_path}")
-        return
-    
+    _, _, label_map = load_data()
+    model = build_model(len(label_map))
+
+    model.load_state_dict(torch.load(model_save_path))
+    model.eval()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+
     img = cv2.imread(image_path)
-    if img is None:
-        logging.error(f"❌ Unable to read image: {image_path}")
-        return
-    
-    features = extract_features(img).reshape(1, -1)
-    prediction = model.predict(features)[0]
-    confidence = np.max(model.predict_proba(features)) * 100
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = val_transforms(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        outputs = model(img)
+        _, predicted = torch.max(outputs.data, 1)
+        prediction = predicted.item()
+
+    confidence = torch.nn.functional.softmax(outputs, dim=1)[0][prediction].item() * 100
     disease_name = label_map[prediction]
-    
     disease_info = load_disease_info().get(disease_name, {})
-    logging.info(f"\n🌿 Disease: {disease_name}")
-    logging.info(f"🔍 Confidence: {confidence:.2f}%")
-    
+
+    logging.info(f"\U0001F33F Disease: {disease_name}")
+    logging.info(f"\U0001F50D Confidence: {confidence:.2f}%")
+
     if disease_info:
-        logging.info("⚠ Precautions:")
+        logging.info("\u26A0 Precautions:")
         for step in disease_info.get("precautions", []):
             logging.info(f"- {step}")
     else:
         logging.info("No information available.")
 
+# ✅ Load disease information from JSON
+def load_disease_info():
+    try:
+        with open(json_file_path, 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        logging.error(f"❌ JSON file not found: {json_file_path}")
+        return {}
+
+# ✅ Main
 if __name__ == '__main__':
-    if not os.path.exists(model_path):
+    if not os.path.exists(model_save_path):
         train_model()
-    
-    test_image = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\yellow curly.jpg"
-    logging.info("\n🔎 Predicting disease for: " + test_image)
-    predict_disease(test_image)
+
+    test_image_path = r"C:\Users\ashky\OneDrive\Desktop\CROP D D\images (3).jpeg"
+    logging.info("\n\U0001F50E Predicting disease for: " + test_image_path)
+    predict_disease(test_image_path)
