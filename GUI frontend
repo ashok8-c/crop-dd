@@ -1,0 +1,136 @@
+import tkinter as tk
+from tkinter import filedialog, ttk
+from PIL import Image, ImageTk
+import torch
+import json
+import cv2
+from torchvision import transforms
+from main import build_model, load_data, model_save_path, json_file_path
+
+# Load label map and model
+_, _, label_map = load_data()
+model = build_model(len(label_map))
+model.load_state_dict(torch.load(model_save_path, map_location=torch.device('cpu')))
+model.eval()
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+# Image transforms
+val_transforms = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+# Load precautions
+def load_precaution_data():
+    try:
+        with open(json_file_path, 'r') as file:
+            return json.load(file)
+    except Exception as e:
+        print(f"Failed to load precautions: {e}")
+        return {}
+
+disease_info = load_precaution_data()
+
+# Predict function
+def predict(image_path):
+    try:
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        img_tensor = val_transforms(image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            outputs = model(img_tensor)
+            probs = torch.nn.functional.softmax(outputs, dim=1)
+            conf, pred_idx = torch.max(probs, 1)
+        disease = label_map[pred_idx.item()]
+        confidence = conf.item() * 100
+        precautions = disease_info.get(disease, {}).get("precautions", [])
+        return disease, confidence, precautions
+    except Exception as e:
+        print(f"Prediction error: {e}")
+        return "Unknown", 0.0, []
+
+# App UI
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Green Life")
+        self.root.geometry("1100x700")
+        self.root.configure(bg="#eaf4ea")
+
+        # Header
+        tk.Label(root, text="Green Life", font=("Helvetica", 26, "bold"), bg="#eaf4ea", fg="#1b5e20").pack(pady=10)
+        tk.Label(root, text="Upload a plant image to detect disease and get precautions", font=("Helvetica", 14), bg="#eaf4ea", fg="#388e3c").pack()
+
+        # Main container frame (horizontal layout)
+        main_frame = tk.Frame(root, bg="#eaf4ea")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Left panel - Image Upload
+        left_frame = tk.Frame(main_frame, bg="#f1f8e9", bd=2, relief="groove", padx=10, pady=10)
+        left_frame.pack(side="left", fill="both", expand=False)
+
+        tk.Label(left_frame, text=" Upload Image", font=("Helvetica", 16, "bold"), bg="#f1f8e9", fg="#2e7d32").pack(pady=10)
+        tk.Button(left_frame, text="Select File", command=self.upload_image, font=("Helvetica", 13), bg="#66bb6a", fg="white").pack()
+
+        self.image_label = tk.Label(left_frame, bg="#f1f8e9")
+        self.image_label.pack(pady=20)
+
+        # Right panel - Result Info (scrollable)
+        right_frame = tk.Frame(main_frame, bg="#eaf4ea")
+        right_frame.pack(side="right", fill="both", expand=True)
+
+        canvas = tk.Canvas(right_frame, bg="#eaf4ea", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(right_frame, orient="vertical", command=canvas.yview)
+        self.result_container = tk.Frame(canvas, bg="#eaf4ea")
+
+        self.result_container.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.result_container, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.result_text = tk.Label(self.result_container, text="", font=("Helvetica", 16, "bold"), bg="#eaf4ea", fg="#1b5e20", wraplength=500, justify="left")
+        self.result_text.pack(pady=10)
+
+        self.precaution_text = tk.Label(self.result_container, text="", font=("Helvetica", 12), bg="#eaf4ea", fg="#4e944f", wraplength=500, justify="left")
+        self.precaution_text.pack(pady=10)
+
+        self.progress = ttk.Progressbar(self.result_container, mode="indeterminate", length=300)
+
+    def upload_image(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg *.jpeg *.png")])
+        if not file_path:
+            return
+
+        image = Image.open(file_path).resize((300, 300))
+        self.image_label.img = ImageTk.PhotoImage(image)
+        self.image_label.config(image=self.image_label.img)
+
+        self.result_text.config(text="")
+        self.precaution_text.config(text="")
+        self.progress.pack(pady=10)
+        self.progress.start()
+
+        self.root.after(100, lambda: self.run_detection(file_path))
+
+    def run_detection(self, path):
+        disease, confidence, precautions = predict(path)
+        self.progress.stop()
+        self.progress.pack_forget()
+
+        self.result_text.config(text=f" Disease: {disease}\n📊 Confidence: {confidence:.2f}%")
+        if precautions:
+            self.precaution_text.config(text=" Precautions:\n" + "\n".join([f"• {p}" for p in precautions]))
+        else:
+            self.precaution_text.config(text="No precautions found for this disease.")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
